@@ -1,0 +1,11 @@
+{
+	"files.associations": {
+		"stdio.h": "c",
+		"string.h": "c",
+		"stdlib.h": "c",
+		"compare": "c",
+		"limits": "c",
+		"new": "c",
+		"dms_data_type.h": "c"
+	}
+}

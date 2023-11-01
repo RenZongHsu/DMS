@@ -1,0 +1,77 @@
+#ifndef __DMS_DATA_TYPE_H__
+#define __DMS_DATA_TYPE_H__
+
+typedef enum
+{
+	DMS_CMD_DATA_ERR = -2,
+	DMS_CMD_ERR = -1,
+	DMS_CMD_VER = 0,
+	DMS_CMD_UPDATE = 1,
+	DMS_CMD_SMOKE = 318,
+	DMS_CMD_YAWN = 312,
+	DMS_CMD_PHONE_CALL = 317,
+	DMS_CMD_NO_FACE = 316,
+	DMS_CMD_DISTRACTION = 315,
+	DMS_CMD_EYE_CLOSED = 311,
+	DMS_CMD_ADJUST = 310,
+	DMS_CMD_CAMERA_BLOCKED = 319,
+	DMS_CMD_FACE_MASK = 320,
+	DMS_CMD_OBJECT_FRAME = 321,
+	DMS_CMD_LOOK_DOWN = 314,
+	DMS_CMD_SEAT_BELT = 313
+}DMS_CMD;
+
+enum
+{
+	DMS_ERR_STATUS = -1,
+	DMS_SET_STATUS = 0,
+	DMS_SEARCH_STATUS = 1,
+	DMS_AT_STATUS = 2,
+};
+
+typedef struct
+{
+	unsigned int trigger_speed;
+	float trigger_time;
+	unsigned int warn_interval;
+}DMS_TRIGGER_TIME_CONFIG;
+
+typedef struct
+{
+	char enable;
+	DMS_TRIGGER_TIME_CONFIG top;
+	DMS_TRIGGER_TIME_CONFIG button;//default speed = 0 km/h
+}DMS_BASE_CONFIG;
+
+typedef struct
+{
+	DMS_BASE_CONFIG smoke;
+	DMS_BASE_CONFIG yawn;
+	DMS_BASE_CONFIG eye_closed;
+	DMS_BASE_CONFIG phone_call;
+	DMS_BASE_CONFIG no_face;
+	DMS_BASE_CONFIG distraction;
+	DMS_BASE_CONFIG camera_blocked;
+	char face_mask;
+	char object_frame;
+	DMS_BASE_CONFIG look_down;
+	DMS_BASE_CONFIG seat_belt;
+}DMS_CONSIG;
+
+typedef enum
+{
+	OTA_CMD_ERR = -1,
+	OTA_CMD_TOTAL_INDEX = 0,
+	OTA_CMD_WRITE = 1,
+}OTA_CMD;
+
+typedef struct
+{
+	OTA_CMD cmd;
+	unsigned int index;
+	unsigned short length;
+	char *payload;
+	unsigned int payload_space;
+}GP_UPGRADE;
+
+#endif
