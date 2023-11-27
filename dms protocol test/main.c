@@ -4,11 +4,20 @@
 #include "windows.h"
 #include <time.h>
 
+#define OTA_DEBUG_EN	0
+
+#if OTA_DEBUG_EN
+#define OTA_DEBUG_COM	6
+#define OTA_DEBUG_FILE	"D:/GP22C_DMS_code/tool/G+ Code Packer V1.9.9.14/OutputBin/GPA7XXXA_SPIFC/Code.bin"
+#endif
+
 #define UPDATE_APP_MODE	"UPDATA_APP"
 
 #define UPDATE_BOOTLOADER_MODE	"UPDATA_BOOTLOADER"
 
 #define SPIFC_BOOTLOADER_SIZE	65536
+
+#define DEFAULT_OTA_BAUDRATE	921600
 
 #define BUFFER_SIZE 1536
 #define RETRY_COUNT 5
@@ -21,10 +30,10 @@ char *gpsFile = NULL;
 char *configFile = NULL;
 unsigned int dms_baudrate = 9600;
 unsigned int gps_baudrate = 9600;
-unsigned int ota_baudrate = 921600;//230400
+unsigned int ota_baudrate = DEFAULT_OTA_BAUDRATE;
 unsigned char *update_mode = UPDATE_APP_MODE;
 
-#define UART_RX_WAIT_TIME 100
+#define UART_RX_WAIT_TIME 500
 HANDLE serialInit(char *port)
 {
 	HANDLE hDevID = CreateFile( // open the serial port
@@ -192,6 +201,10 @@ void argProcess(char *argv)
 			hDevID = serialInit(str);
 		}
 	}
+	else if(strstr(argv, "baudrate:"))
+	{
+		sscanf(argv, "baudrate:%u", &ota_baudrate);
+	}
 	else if(strstr(argv, "sfile:"))
 	{
 		if(sourceFile == NULL)
@@ -263,6 +276,7 @@ void argProcess(char *argv)
 int main(int argc, char *argv[])
 {
 
+#if OTA_DEBUG_EN == 0
 	if(argc == 1)
 	{
 		return -1;
@@ -271,7 +285,15 @@ int main(int argc, char *argv[])
 	{
 		argProcess(argv[axis]);
 	}
+#else
 
+	{
+		char str[14];
+		snprintf(str, sizeof(str), "\\\\.\\COM%d", OTA_DEBUG_COM);
+		hDevID = serialInit(str);
+		sourceFile = OTA_DEBUG_FILE;
+	}
+#endif
 	FILE *fptr;
 	if(configFile)
 	{
@@ -331,7 +353,7 @@ int main(int argc, char *argv[])
 								start = end;
 								break;
 							}
-							Sleep(10);
+							Sleep(20);
 						} while(1);
 					}
 				}
@@ -384,7 +406,14 @@ int main(int argc, char *argv[])
 	}
 	else if(sourceFile)
 	{
+		unsigned int file_size;
+		float total_file_size;
+		unsigned int total_index;
+		char payload[1024] = {0};
+		unsigned int write_length;
 		unsigned int retry = RETRY_COUNT;
+		int percent = -1;
+		unsigned int index = 0;
 		printf("%s start\r\n", update_mode);
 		if(serialSetup(hDevID, dms_baudrate, NOPARITY, 8, ONESTOPBIT) == -1)
 		{
@@ -395,32 +424,36 @@ int main(int argc, char *argv[])
 		do
 		{
 			print_string(hDevID, "AT+%s\r\n", update_mode);
-			if(0 == serialRead(hDevID, read_buf, sizeof(read_buf), 1, 5000))
+			if(0 == serialRead(hDevID, read_buf, sizeof(read_buf), 0, 5000))
 			{
 				break;
 			}
-			Sleep(10);
+			Sleep(20);
 		} while(--retry);
-		if(retry == 0)
+		if(retry == 0 || strstr(read_buf, "Reboot") == 0)
 		{
+			printf("Wait Reboot timeout\r\n");
 			return -1;
 		}
+		printf("Reboot\r\n");
 		if(serialSetup(hDevID, ota_baudrate, NOPARITY, 8, ONESTOPBIT) == -1)
 		{
 			printf("serialSetup fail\r\n");
 			return -1;
 		}
 		printf("Baudrate:%d\r\n", ota_baudrate);
-		if(serialRead(hDevID, read_buf, sizeof(read_buf), 1, 5000) != 0)
+		if(serialRead(hDevID, read_buf, sizeof(read_buf), 0, 5000) != 0)
 		{
 			printf("Wait OTA boot timeout\r\n");
 			return -1;
 		}
+		if(strstr(read_buf, "OTA_BOOT") == 0)
+		{
+			printf("Wait OTA boot fail\r\n");
+			return -1;
+		}
+		printf("OTA_BOOT\r\n");
 
-		unsigned int file_size;
-		float total_file_size;
-		unsigned int total_index;
-		char payload[1024] = {0};
 		if(fopen_s(&fptr, sourceFile, "r") == 0)
 		{
 			unsigned int offset = 0;
@@ -437,7 +470,8 @@ int main(int argc, char *argv[])
 			{
 				++total_index;
 			}
-
+			--total_index;
+			printf("Total index:%d\r\n", total_index);
 			sourceFile = calloc(1, file_size);
 			if(fread(sourceFile, 1, file_size, fptr) == 0)
 			{
@@ -451,9 +485,11 @@ int main(int argc, char *argv[])
 			printf("Can't open source file\r\n");
 			return -1;
 		}
-		retry = RETRY_COUNT;
 
-		unsigned int write_length = ota_encode_total_index_cmd(print_buf, sizeof(print_buf), total_index);
+
+
+		write_length = ota_encode_total_index_cmd(print_buf, sizeof(print_buf), total_index);
+		retry = RETRY_COUNT;
 		do
 		{
 			serialWrite(hDevID, print_buf, write_length);
@@ -461,20 +497,20 @@ int main(int argc, char *argv[])
 			{
 				break;
 			}
-			Sleep(10);
+			Sleep(20);
 		} while(--retry);
 		if(retry == 0)
 		{
+			printf("Wait total index timeout\r\n");
 			return -1;
 		}
 		total_file_size = file_size;
 
-		int percent = -1;
-		unsigned int index = 0;
 		while(file_size)
 		{
 			unsigned int crc;
 			unsigned int payload_size;
+			int err = 0;
 
 			if(file_size >= 1024)
 			{
@@ -493,46 +529,65 @@ int main(int argc, char *argv[])
 				serialWrite(hDevID, print_buf, write_length);
 				if(serialRead(hDevID, read_buf, sizeof(read_buf), 0, UART_RX_WAIT_TIME) == 0)
 				{
+					unsigned int read_index;
+					if(ota_decode_request_cmd(read_buf, &read_index))
+					{
+						if(read_index == (index + 1))
+						{
+							sourceFile += payload_size;
+							file_size -= payload_size;
+							index = read_index;
+							{
+								int now_per = ((1 - file_size / total_file_size) * 100);
+								if(percent != now_per)
+								{
+									printf("%d%%\r\n", now_per);
+
+									percent = now_per;
+								}
+							}
+						}
+					}
+					else if(strstr(read_buf, "END_BOOT"))
+					{
+						sourceFile += payload_size;
+						file_size -= payload_size;
+						++index;
+						{
+							int now_per = ((1 - file_size / total_file_size) * 100);
+							if(percent != now_per)
+							{
+								printf("%d%%\r\n", now_per);
+
+								percent = now_per;
+							}
+						}
+						printf("END_BOOT\r\n");
+					}
+					else if(strstr(read_buf, "ERROR_UPGRADE"))
+					{
+						err = 1;
+						printf("ERROR_UPGRADE\r\n");
+					}
+					else
+					{
+						printf("Receive cmd error\r\n");
+					}
 					break;
 				}
-				Sleep(10);
-			} while(--retry);
+				Sleep(20);
+			} while(--retry && !err);
 			if(retry == 0)
 			{
-				return -1;
+				printf("Wait payload ack timeout\r\n");
+				break;
 			}
-			unsigned int read_index;
-			if(ota_decode_request_cmd(read_buf, &read_index))
+			else if(err)
 			{
-				if(read_index == (index + 1))
-				{
-					sourceFile += payload_size;
-					file_size -= payload_size;
-					index = read_index;
-				}
-				int now_per = ((1 - file_size / total_file_size) * 100);
-				if(percent != now_per)
-				{
-					printf("%d%%\r\n", now_per);
-
-					percent = now_per;
-				}
-			}
-			else if(strstr(read_buf, "END_BOOT"))
-			{
-				if(read_index != (total_index - 1))
-				{
-					printf("Upgrade fail\r\n");
-				}
-				else
-				{
-					printf("100%%\r\nUpgrade success\r\n");
-				}
-				file_size = 0;
+				break;
 			}
 		}
 	}
-
 	if(!CloseHandle(hDevID))
 	{
 		printf("CloseHandle() failed\n");

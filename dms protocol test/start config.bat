@@ -1,2 +1,2 @@
-main.exe COM6 "cfile:DMS cmd.txt"
+main.exe COM10 "cfile:DMS cmd.txt"
 pause

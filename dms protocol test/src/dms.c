@@ -1207,7 +1207,6 @@ int ota_encode_request_cmd(char *str, unsigned int length, unsigned int index)
 	}
 }
 
-
 int ota_decode_request_cmd(char *str, unsigned int *index)
 {
 	unsigned int crc, index_buf;

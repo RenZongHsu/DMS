@@ -1,2 +1,2 @@
-main.exe COM4 "gfile:GPS cmd.txt"
+main.exe COM11 "gfile:GPS cmd.txt"
 pause
