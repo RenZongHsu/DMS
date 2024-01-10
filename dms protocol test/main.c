@@ -7,13 +7,13 @@
 #define OTA_DEBUG_EN	0
 
 #if OTA_DEBUG_EN
-#define OTA_DEBUG_COM	6
-#define OTA_DEBUG_FILE	"D:/GP22C_DMS_code/tool/G+ Code Packer V1.9.9.14/OutputBin/GPA7XXXA_SPIFC/Code.bin"
+#define OTA_DEBUG_COM	9
+#define OTA_DEBUG_FILE	"D:/GP22C_DMS_code/tool/G+ Code Packer V1.9.9.17/OutputBin/GPA7XXXA_SPIFC/Code.bin"
 #endif
 
-#define UPDATE_APP_MODE	"UPDATA_APP"
+#define UPDATE_APP_MODE	"UPDATE_APP"
 
-#define UPDATE_BOOTLOADER_MODE	"UPDATA_BOOTLOADER"
+#define UPDATE_BOOTLOADER_MODE	"UPDATE_BOOTLOADER"
 
 #define SPIFC_BOOTLOADER_SIZE	65536
 
@@ -56,6 +56,28 @@ HANDLE serialInit(char *port)
 		printf("CreateFile() succeeded\n");
 		return hDevID;
 	}
+}
+
+int serialGetState(HANDLE hDevID, DWORD *baudrate, BYTE *parity, BYTE *byteSize, BYTE *stopBits)
+{
+	DCB dcb;
+	if(hDevID == INVALID_HANDLE_VALUE)
+	{
+		return 0;
+	}
+	memset(&dcb, 0, sizeof(DCB));
+	if(!GetCommState(hDevID, &dcb))
+	{
+		printf("GetCommState() failed\n");
+		CloseHandle(hDevID);
+		return 0;
+	}
+
+	*baudrate = dcb.BaudRate;
+	*parity = dcb.Parity;
+	*byteSize = dcb.ByteSize;
+	*stopBits = dcb.StopBits;
+	return 1;
 }
 
 int serialSetup(HANDLE hDevID, DWORD baudrate, BYTE parity, BYTE byteSize, BYTE stopBits)
@@ -118,15 +140,15 @@ int serialWrite(HANDLE hDevID, char *data, unsigned int size)
 	return 0;
 }
 
-int serialRead(HANDLE hDevID, char *data, unsigned int size, char printable, unsigned long time_out)
+int serialRead(HANDLE hDevID, char *data, unsigned int size, char printable, unsigned long long time_out)
 {
 	char *start_read = data;
 	unsigned int nbbytes;
 	struct timespec start, end;
-	clock_gettime(CLOCK_REALTIME, &start);
 	// do stuff
 
 	memset(start_read, 0, size);
+	clock_gettime(CLOCK_REALTIME, &start);
 	do
 	{
 		if(!ReadFile(hDevID, start_read, size, (LPDWORD)&nbbytes, NULL))
@@ -155,10 +177,10 @@ int serialRead(HANDLE hDevID, char *data, unsigned int size, char printable, uns
 			}
 		}
 		clock_gettime(CLOCK_REALTIME, &end);
-		unsigned long delta_us = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
+		unsigned long long delta_us = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
 		if(delta_us > time_out)
 		{
-			//printf("Receive timeout\r\n");
+			//printf("Receive timeout : %ul, %ul\r\n", end.tv_sec - start.tv_sec, end.tv_nsec - start.tv_nsec);
 			return -1;
 		}
 	} while(size > 0);
@@ -271,6 +293,73 @@ void argProcess(char *argv)
 			printf("System no space\r\n");
 		}
 	}
+}
+
+int dmsGetVersion(HANDLE handle)
+{
+	int retry = RETRY_COUNT;
+	do
+	{
+		print_string(handle, "AT+VER\r\n");
+		if(0 == serialRead(handle, read_buf, sizeof(read_buf), 1, 5000))
+		{
+			break;
+		}
+		Sleep(20);
+	} while(--retry);
+	return retry;
+}
+
+int dmsSetBaudrate(HANDLE handle, unsigned int target_baudrate)
+{
+	int retry = RETRY_COUNT;
+	do
+	{
+		print_string(handle, "AT+BAUDRATE:%u\r\n", target_baudrate);
+		if(serialRead(handle, read_buf, sizeof(read_buf), 1, 5000) == 0)
+		{
+			char *start = strstr(read_buf, "BAUDRATE=");
+			if(start)
+			{
+				unsigned int baudrate;
+				start += strlen("BAUDRATE=");
+				baudrate = atoi(start);
+				if(target_baudrate != baudrate)
+				{
+					if(serialSetup(handle, target_baudrate, NOPARITY, 8, ONESTOPBIT) == -1)
+					{
+						printf("Baudrate setup fail\r\n");
+						return 0;
+					}
+					else
+					{
+						return dmsSetBaudrate(handle, target_baudrate);
+					}
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+		Sleep(20);
+	} while(--retry);
+	return retry;
+}
+
+int dmsSendUpdateMode(HANDLE handle, unsigned char *update_mode)
+{
+	int retry = RETRY_COUNT;
+	do
+	{
+		print_string(handle, "AT+%s\r\n", update_mode);
+		if(0 == serialRead(handle, read_buf, sizeof(read_buf), 0, 5000))
+		{
+			break;
+		}
+		Sleep(20);
+	} while(--retry);
+	return (retry && strstr(read_buf, "Reboot") != 0);
 }
 
 int main(int argc, char *argv[])
@@ -414,34 +503,41 @@ int main(int argc, char *argv[])
 		unsigned int retry = RETRY_COUNT;
 		int percent = -1;
 		unsigned int index = 0;
-		printf("%s start\r\n", update_mode);
+		char *write;
 		if(serialSetup(hDevID, dms_baudrate, NOPARITY, 8, ONESTOPBIT) == -1)
 		{
 			printf("COM port setup fail\r\n");
 			return -1;
 		}
 		printf("Baudrate:%d\r\n", dms_baudrate);
-		do
+
+		if(!dmsGetVersion(hDevID))
 		{
-			print_string(hDevID, "AT+%s\r\n", update_mode);
-			if(0 == serialRead(hDevID, read_buf, sizeof(read_buf), 0, 5000))
-			{
-				break;
-			}
-			Sleep(20);
-		} while(--retry);
-		if(retry == 0 || strstr(read_buf, "Reboot") == 0)
+			printf("Get version fail\r\n");
+			return -1;
+		}
+
+		printf("%s start\r\n", update_mode);
+
+		if(!dmsSetBaudrate(hDevID, ota_baudrate))
 		{
-			printf("Wait Reboot timeout\r\n");
+			printf("Baudrate setup fail\r\n");
+			return -1;
+		}
+
+		if(!dmsSendUpdateMode(hDevID, update_mode))
+		{
+			printf("Wait Reboot fail\r\n");
 			return -1;
 		}
 		printf("Reboot\r\n");
+
 		if(serialSetup(hDevID, ota_baudrate, NOPARITY, 8, ONESTOPBIT) == -1)
 		{
 			printf("serialSetup fail\r\n");
 			return -1;
 		}
-		printf("Baudrate:%d\r\n", ota_baudrate);
+
 		if(serialRead(hDevID, read_buf, sizeof(read_buf), 0, 5000) != 0)
 		{
 			printf("Wait OTA boot timeout\r\n");
@@ -457,7 +553,7 @@ int main(int argc, char *argv[])
 		if(fopen_s(&fptr, sourceFile, "r") == 0)
 		{
 			unsigned int offset = 0;
-			if(strstr(update_mode, "UPDATA_APP"))
+			if(strstr(update_mode, UPDATE_APP_MODE))
 			{
 				offset = SPIFC_BOOTLOADER_SIZE;
 			}
@@ -478,6 +574,7 @@ int main(int argc, char *argv[])
 				printf("fread fail\r\n");
 				return 0;
 			}
+			write = sourceFile;
 			fclose(fptr);
 		}
 		else
@@ -514,12 +611,12 @@ int main(int argc, char *argv[])
 
 			if(file_size >= 1024)
 			{
-				memcpy(payload, sourceFile, 1024);
+				memcpy(payload, write, 1024);
 				payload_size = 1024;
 			}
 			else
 			{
-				memcpy(payload, sourceFile, file_size);
+				memcpy(payload, write, file_size);
 				payload_size = file_size;
 			}
 			retry = RETRY_COUNT;
@@ -534,7 +631,7 @@ int main(int argc, char *argv[])
 					{
 						if(read_index == (index + 1))
 						{
-							sourceFile += payload_size;
+							write += payload_size;
 							file_size -= payload_size;
 							index = read_index;
 							{
@@ -550,7 +647,7 @@ int main(int argc, char *argv[])
 					}
 					else if(strstr(read_buf, "END_BOOT"))
 					{
-						sourceFile += payload_size;
+						write += payload_size;
 						file_size -= payload_size;
 						++index;
 						{
@@ -587,6 +684,7 @@ int main(int argc, char *argv[])
 				break;
 			}
 		}
+		free(sourceFile);
 	}
 	if(!CloseHandle(hDevID))
 	{
